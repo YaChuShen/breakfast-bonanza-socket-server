@@ -1,56 +1,111 @@
-require('dotenv').config();
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
+require("dotenv").config();
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const { PrismaClient } = require("@prisma/client");
 
 const prisma = new PrismaClient();
 const app = express();
+
+// Add basic middleware
+app.use(express.json());
+
+app.use((req, res, next) => {
+  console.log("Incoming request:", {
+    method: req.method,
+    url: req.url,
+    headers: req.headers,
+  });
+  next();
+});
+
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*' },
+  cors: {
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "http://localhost:3002",
+      "https://breakfast-bonanza-socket-server.onrender.com",
+    ],
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+  transports: ["websocket", "polling"],
 });
 
-// 驗證用戶身份
 io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
-  try {
-    const user = jwt.verify(token, process.env.NEXTAUTH_SECRET);
-    socket.user = user;
-    next();
-  } catch (err) {
-    next(new Error('Unauthorized'));
+  const userId = socket.handshake.auth.token;
+  if (!userId) {
+    console.log("Authentication failed - No token provided");
+    return next(new Error("Unauthorized"));
   }
+  socket.user = {
+    id: userId,
+    name: socket.handshake.auth.name,
+    email: socket.handshake.auth.email,
+  };
+  next();
 });
 
-// Socket 行為處理
-io.on('connection', (socket) => {
-  console.log(`${socket.user.email} connected`);
-
-  socket.on('joinRoom', (roomId) => {
-    socket.join(roomId);
-    console.log(`${socket.user.name} joined room ${roomId}`);
+io.on("connection", (socket) => {
+  socket.on("error", (error) => {
+    console.error("Socket error:", error);
   });
 
-  socket.on('gameOver', async ({ roomId, winner }) => {
+  socket.on("connect_error", (error) => {
+    console.error("Connection error:", error);
+  });
+
+  socket.on("joinRoom", (roomId) => {
+    socket.join(roomId);
+    console.log(`User ${socket.user.id} joined room ${roomId}`);
+
+    socket.to(roomId).emit("playerJoined", {
+      playerId: socket.user.id,
+      playerName: socket.user.name,
+      playerEmail: socket.user.email,
+    });
+  });
+
+  socket.on("updateScore", ({ roomId, score }) => {
+    io.to(roomId).emit("scoreUpdated", {
+      playerId: socket.user.id,
+      score: score,
+    });
+  });
+
+  socket.on("gameOver", async ({ roomId, winner, scores }) => {
     try {
       await prisma.match.create({
         data: {
-          player1: 'Serene', // 實際應用中從 socket.user 拿
-          player2: 'ChatGPT',
+          player1: scores.player1.id,
+          player2: scores.player2.id,
+          player1Score: scores.player1.score,
+          player2Score: scores.player2.score,
           winner: winner,
         },
       });
-      console.log('Match recorded');
+
+      io.to(roomId).emit("gameEnded", {
+        winner,
+        scores,
+      });
+
+      console.log("Match recorded");
     } catch (e) {
-      console.error('DB error', e);
+      console.error("DB error", e);
     }
+  });
+
+  socket.on("disconnect", () => {
+    console.log(`User ${socket.user.id} disconnected`);
   });
 });
 
 const PORT = process.env.PORT || 3001;
+
 server.listen(PORT, () => {
   console.log(`✅ Socket server running on port ${PORT}`);
+  console.log(`Test the server at: http://localhost:${PORT}/test`);
 });
