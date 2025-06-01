@@ -61,18 +61,8 @@ io.on("connection", (socket) => {
 
   socket.on("joinRoom", (roomId) => {
     socket.join(roomId);
-    userRooms.set(socket.user.id, roomId);
     socket.data.roomId = roomId;
-    console.log(`User ${socket.user.id} joined room ${roomId}`);
-    console.log("Current userRooms:", Object.fromEntries(userRooms));
-
-    if (!roomHosts[roomId]) {
-      roomHosts[roomId] = {
-        hostId: socket.user.id,
-        hostName: socket.user.name,
-        hostEmail: socket.user.email,
-      };
-    }
+    console.log(`User ${socket.user.name} joined room ${roomId}`);
 
     socket.to(roomId).emit("playerJoined", {
       playerId: socket.user.id,
@@ -83,17 +73,54 @@ io.on("connection", (socket) => {
     socket.emit("hostInfo", roomHosts[roomId]);
   });
 
-  // socket.on("connectionFailed", ({ roomId, error }) => {
-  //   console.log(`Connection failed for room ${roomId}:`, error);
-  //   // Notify host about the connection failure
-  //   socket.to(roomId).emit("guestConnectionFailed", {
-  //     error: error,
-  //     timestamp: new Date().toISOString(),
-  //   });
-  // });
+  socket.on("createRoom", (roomId) => {
+    socket.join(roomId);
+    userRooms.set(socket.user.id, roomId);
+    socket.data.roomId = roomId;
+    roomHosts[roomId] = {
+      hostId: socket.user.id,
+      hostName: socket.user.name,
+      hostEmail: socket.user.email,
+    };
+  });
+
+  socket.on("playerReady", (roomId) => {
+    socket.to(roomId).emit("opponentReady", {
+      playerId: socket.user.id,
+      playerName: socket.user.name,
+    });
+  });
+
+  socket.on("gameStart", (roomId) => {
+    io.to(roomId).emit("hostStartTheGame");
+  });
+
+  socket.on("scoreUpdate", ({ roomId, score }) => {
+    try {
+      // Validate inputs
+      if (!roomId || typeof score !== "number") {
+        console.error("Invalid score update data:", { roomId, score });
+        return;
+      }
+
+      console.log(
+        `Score update from ${socket.user.name} in room ${roomId}, ID為: ${socket.user.id}, 分數為: ${score}`
+      );
+
+      // Emit to all other players in the room except the sender
+      socket.to(roomId).emit("opponentScoreUpdate", {
+        playerId: socket.user.id,
+        playerName: socket.user.name,
+        score,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("Error handling score update:", error);
+    }
+  });
 
   socket.on("disconnect", () => {
-    console.log(`User ${socket.user.id} disconnected`);
+    console.log(`User ${socket.user.name} disconnected`);
     console.log(
       "Current userRooms before cleanup:",
       Object.fromEntries(userRooms)
@@ -129,24 +156,6 @@ io.on("connection", (socket) => {
       console.log("No room found for disconnected user");
     }
   });
-
-  // socket.on("playerReady", ({ roomId }) => {
-  //   socket.to(roomId).emit("opponentReady", {
-  //     playerId: socket.user.id,
-  //     playerName: socket.user.name,
-  //   });
-  // });
-
-  // socket.on("startGame", ({ roomId }) => {
-  //   io.to(roomId).emit("gameStarted");
-  // });
-
-  // socket.on("updateScore", ({ roomId, score }) => {
-  //   io.to(roomId).emit("scoreUpdated", {
-  //     playerId: socket.user.id,
-  //     score: score,
-  //   });
-  // });
 
   // socket.on("gameOver", async ({ roomId, winner, scores }) => {
   //   try {
